@@ -54,18 +54,38 @@ Since automated scraping is blocked, you can:
    - Use browser extensions designed for data collection
    - These run in your actual browser and avoid bot detection
 
-### Option 3: Use a Headless Browser with Anti-Detection
+### Option 3: Use the Built-in Stealth Browser Scraper (Implemented!)
 
-If you need to scrape without API access, you can:
+The repository includes a fully implemented stealth scraper using Puppeteer + Stealth plugin:
 
-1. **Install Puppeteer Extra with Stealth Plugin**
+1. **Ensure you're in an environment with internet access**
+   - Chromium needs to be downloaded during `npm install`
+   - Network must allow access to storage.googleapis.com
+
+2. **Install dependencies**
    ```bash
-   npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth
+   npm install
+   ```
+   This will automatically download Chromium (~200MB)
+
+3. **Run the stealth scraper**
+   ```bash
+   npm run scrape:stealth
    ```
 
-2. **Modify the scraper** to use Puppeteer with stealth mode
-   - This makes the browser appear more human-like
-   - Still may be detected and blocked
+4. **Features of the stealth scraper**:
+   - Uses Puppeteer-Extra with Stealth plugin for anti-detection
+   - Overrides navigator.webdriver property
+   - Uses realistic browser headers and viewport
+   - Scrapes Product Hunt pages like a real user
+   - Extracts product data from both DOM and Next.js JSON
+   - Exports to JSON and CSV
+
+5. **Expected behavior**:
+   - Opens headless Chrome browser
+   - Visits each day in December 2025
+   - Extracts products and their external websites
+   - Saves results to `output/` directory
 
 ## Understanding the 403 Error
 

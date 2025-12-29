@@ -58,11 +58,21 @@ PRODUCT_HUNT_API_TOKEN=your_token_here
 
 ## Usage
 
-### Run the scraper
+### Option 1: Run the API-based scraper (requires authentication)
 
 ```bash
 npm run scrape
 ```
+
+### Option 2: Run the stealth browser scraper (recommended)
+
+This uses Puppeteer with Stealth plugin to bypass bot detection:
+
+```bash
+npm run scrape:stealth
+```
+
+**Note**: This requires an environment with internet access to download Chromium during installation.
 
 This will:
 1. Scrape all Product Hunt posts from December 2025 (up to today's date)
