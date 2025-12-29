@@ -2,6 +2,10 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
 
 interface Product {
   name: string;
@@ -13,31 +17,22 @@ interface Product {
 }
 
 class ProductHuntScraper {
+  private apiUrl = 'https://api.producthunt.com/v2/api/graphql';
   private baseUrl = 'https://www.producthunt.com';
   private products: Product[] = [];
-  private delay = 2000; // 2 seconds delay between requests to be respectful
+  private delay = parseInt(process.env.DELAY_MS || '1000');
+  private apiToken = process.env.PRODUCT_HUNT_API_TOKEN;
 
-  constructor() {}
+  constructor() {
+    if (!this.apiToken) {
+      console.warn('⚠️  Warning: PRODUCT_HUNT_API_TOKEN not set in environment variables');
+      console.warn('⚠️  API requests will likely fail without authentication');
+      console.warn('⚠️  Get your API token from: https://www.producthunt.com/v2/oauth/applications\n');
+    }
+  }
 
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  private async fetchPage(url: string): Promise<string> {
-    try {
-      console.log(`Fetching: ${url}`);
-      const response = await axios.get(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-        },
-      });
-      return response.data;
-    } catch (error: any) {
-      console.error(`Error fetching ${url}:`, error.message);
-      return '';
-    }
   }
 
   private getDatesInDecember(year: number): string[] {
@@ -53,118 +48,131 @@ class ProductHuntScraper {
     return dates;
   }
 
-  private parseProductsFromPage(html: string, date: string): Product[] {
-    const $ = cheerio.load(html);
-    const products: Product[] = [];
-
+  // Using Product Hunt's public GraphQL API
+  private async fetchProductsForDate(date: string): Promise<Product[]> {
     try {
-      // Product Hunt structure - looking for product cards
-      // The structure may vary, so we'll try multiple selectors
+      console.log(`\nFetching products for ${date}...`);
 
-      // Try to find product links
-      $('a[href^="/posts/"]').each((_, element) => {
-        const $el = $(element);
-        const href = $el.attr('href');
-
-        if (href && !href.includes('/topics/') && !href.includes('/discussions/')) {
-          const productName = $el.find('h3, h2, strong').first().text().trim();
-          const tagline = $el.find('p').first().text().trim();
-
-          if (productName) {
-            const productUrl = `${this.baseUrl}${href}`;
-
-            products.push({
-              name: productName,
-              tagline: tagline || '',
-              websiteUrl: '', // Will be filled when visiting product page
-              productHuntUrl: productUrl,
-              date: date,
-            });
+      // GraphQL query to get posts for a specific date
+      const query = `
+        query {
+          posts(order: VOTES, postedAfter: "${date}T00:00:00Z", postedBefore: "${date}T23:59:59Z") {
+            edges {
+              node {
+                id
+                name
+                tagline
+                votesCount
+                website
+                url
+              }
+            }
           }
         }
-      });
+      `;
 
-      // Alternative: Look for article or div elements containing products
-      $('article, div[data-test*="post"], div[class*="post"]').each((_, element) => {
-        const $el = $(element);
-        const link = $el.find('a[href^="/posts/"]').first();
-        const href = link.attr('href');
+      const headers: any = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
 
-        if (href && !products.some(p => p.productHuntUrl.includes(href))) {
-          const productName = $el.find('h3, h2, strong').first().text().trim();
-          const tagline = $el.find('p').first().text().trim();
+      if (this.apiToken) {
+        headers['Authorization'] = `Bearer ${this.apiToken}`;
+      }
 
-          if (productName) {
-            const productUrl = `${this.baseUrl}${href}`;
+      const response = await axios.post(
+        this.apiUrl,
+        { query },
+        { headers }
+      );
 
-            products.push({
-              name: productName,
-              tagline: tagline || '',
-              websiteUrl: '',
-              productHuntUrl: productUrl,
-              date: date,
-            });
-          }
-        }
-      });
+      if (response.data && response.data.data && response.data.data.posts) {
+        const posts = response.data.data.posts.edges;
+        console.log(`Found ${posts.length} products`);
+
+        return posts.map((edge: any) => {
+          const node = edge.node;
+          return {
+            name: node.name,
+            tagline: node.tagline || '',
+            websiteUrl: node.website || '',
+            productHuntUrl: node.url || `${this.baseUrl}/posts/${node.id}`,
+            date: date,
+            upvotes: node.votesCount,
+          };
+        });
+      }
+
+      return [];
     } catch (error: any) {
-      console.error(`Error parsing products from page:`, error.message);
-    }
+      console.error(`Error fetching products for ${date}:`, error.message);
 
-    return products;
+      // If API fails, try scraping the daily page as fallback
+      return await this.scrapeProductsForDate(date);
+    }
   }
 
-  private async getProductWebsiteUrl(productUrl: string): Promise<string> {
+  // Fallback: Scrape the daily page if API fails
+  private async scrapeProductsForDate(date: string): Promise<Product[]> {
     try {
-      await this.sleep(this.delay);
-      const html = await this.fetchPage(productUrl);
-      const $ = cheerio.load(html);
+      console.log(`Trying fallback scraping for ${date}...`);
 
-      // Try to find the external website link
-      // Look for common patterns for external links
-      let websiteUrl = '';
+      // Try different URL patterns
+      const urls = [
+        `${this.baseUrl}/?day=${date}`,
+        `${this.baseUrl}/posts?day=${date}`,
+      ];
 
-      // Method 1: Look for "Visit" or "Get it" links
-      $('a').each((_, element) => {
-        const $el = $(element);
-        const href = $el.attr('href') || '';
-        const text = $el.text().toLowerCase();
+      for (const url of urls) {
+        try {
+          const response = await axios.get(url, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.9',
+              'Referer': 'https://www.producthunt.com/',
+            },
+          });
 
-        if (
-          (text.includes('visit') || text.includes('get it') || text.includes('website')) &&
-          (href.startsWith('http://') || href.startsWith('https://')) &&
-          !href.includes('producthunt.com')
-        ) {
-          websiteUrl = href;
-          return false; // break
-        }
-      });
+          const $ = cheerio.load(response.data);
+          const products: Product[] = [];
 
-      // Method 2: Look for external links in meta tags
-      if (!websiteUrl) {
-        const ogUrl = $('meta[property="og:url"]').attr('content');
-        if (ogUrl && !ogUrl.includes('producthunt.com')) {
-          websiteUrl = ogUrl;
+          // Look for product data in script tags (often contains JSON data)
+          $('script[type="application/json"]').each((_, element) => {
+            try {
+              const jsonData = JSON.parse($(element).html() || '{}');
+              // Try to extract product data from various JSON structures
+              if (jsonData.props && jsonData.props.pageProps) {
+                const data = jsonData.props.pageProps;
+                if (data.posts || data.items || data.products) {
+                  // Extract products from the data structure
+                  console.log('Found product data in JSON');
+                }
+              }
+            } catch (e) {
+              // Not valid JSON or doesn't contain product data
+            }
+          });
+
+          if (products.length > 0) {
+            return products;
+          }
+        } catch (e: any) {
+          console.log(`Failed to fetch ${url}: ${e.message}`);
         }
       }
 
-      // Method 3: Look for canonical link
-      if (!websiteUrl) {
-        const canonical = $('link[rel="canonical"]').attr('href');
-        if (canonical && !canonical.includes('producthunt.com')) {
-          websiteUrl = canonical;
-        }
-      }
-
-      return websiteUrl;
+      return [];
     } catch (error: any) {
-      console.error(`Error fetching website URL for ${productUrl}:`, error.message);
-      return '';
+      console.error(`Fallback scraping failed for ${date}:`, error.message);
+      return [];
     }
   }
 
   async scrapeDecember(year: number = 2025): Promise<void> {
     console.log(`\nStarting to scrape Product Hunt for December ${year}...\n`);
+    console.log('Note: Product Hunt may block or limit automated requests.');
+    console.log('Consider using their official API with authentication for better results.\n');
 
     const dates = this.getDatesInDecember(year);
     const today = new Date();
@@ -177,29 +185,16 @@ class ProductHuntScraper {
         continue;
       }
 
-      console.log(`\nScraping products from ${date}...`);
-      const url = `${this.baseUrl}/time-travel/${date}`;
+      const productsOnDate = await this.fetchProductsForDate(date);
 
-      const html = await this.fetchPage(url);
-      if (!html) {
-        console.log(`No data retrieved for ${date}`);
-        continue;
-      }
-
-      const productsOnDate = this.parseProductsFromPage(html, date);
-      console.log(`Found ${productsOnDate.length} products on ${date}`);
-
-      // Fetch website URLs for each product
-      for (const product of productsOnDate) {
-        console.log(`  - ${product.name}`);
-        const websiteUrl = await this.getProductWebsiteUrl(product.productHuntUrl);
-        product.websiteUrl = websiteUrl;
-
-        if (websiteUrl) {
-          console.log(`    Website: ${websiteUrl}`);
-        } else {
-          console.log(`    Website: Not found`);
-        }
+      if (productsOnDate.length > 0) {
+        console.log(`Successfully retrieved ${productsOnDate.length} products for ${date}`);
+        productsOnDate.forEach(p => {
+          console.log(`  - ${p.name}`);
+          if (p.websiteUrl) {
+            console.log(`    Website: ${p.websiteUrl}`);
+          }
+        });
       }
 
       this.products.push(...productsOnDate);
@@ -230,13 +225,14 @@ class ProductHuntScraper {
     const outputPath = path.join(process.cwd(), 'output', filename);
 
     try {
-      const headers = ['Date', 'Product Name', 'Tagline', 'Website URL', 'Product Hunt URL'];
+      const headers = ['Date', 'Product Name', 'Tagline', 'Website URL', 'Product Hunt URL', 'Upvotes'];
       const rows = this.products.map(p => [
         p.date,
         `"${p.name.replace(/"/g, '""')}"`,
         `"${p.tagline.replace(/"/g, '""')}"`,
         p.websiteUrl,
         p.productHuntUrl,
+        p.upvotes || 0,
       ]);
 
       const csv = [

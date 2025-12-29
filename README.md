@@ -1,19 +1,37 @@
 # Product Hunt Scraper
 
-A TypeScript-based web scraper that extracts external website URLs from Product Hunt posts for the month of December.
+A TypeScript-based scraper that extracts external website URLs from Product Hunt posts for the month of December.
+
+## Important Notice
+
+Product Hunt has strong bot protection and their API requires authentication. This scraper provides the framework, but to successfully collect data you'll need:
+
+1. **Product Hunt API Access** - Register for API access at https://api.producthunt.com/v2/docs
+2. **API Token** - Get your API token from Product Hunt's developer dashboard
+3. **Alternative**: Use a browser automation tool like Puppeteer/Playwright with proper setup
+
+## Current Status
+
+The scraper currently encounters 403 errors due to Product Hunt's bot protection. To make it work:
+
+- Add authentication to the GraphQL API requests
+- Use Product Hunt's official API with proper credentials
+- Or use a headless browser with anti-detection measures
 
 ## Features
 
-- Scrapes Product Hunt posts for all days in December 2025
+- GraphQL API integration (requires authentication)
+- Fallback to web scraping (currently blocked)
 - Extracts product names, taglines, and external website URLs
 - Exports data to both JSON and CSV formats
-- Implements respectful scraping with delays between requests
-- Handles errors gracefully and provides detailed logging
+- Handles errors gracefully with detailed logging
+- Respectful rate limiting
 
 ## Prerequisites
 
 - Node.js (v16 or higher)
 - npm or yarn
+- Product Hunt API credentials (for successful scraping)
 
 ## Installation
 
@@ -26,6 +44,16 @@ cd cursor-things
 2. Install dependencies:
 ```bash
 npm install
+```
+
+3. Set up environment variables:
+```bash
+cp .env.example .env
+```
+
+4. Add your Product Hunt API token to `.env`:
+```
+PRODUCT_HUNT_API_TOKEN=your_token_here
 ```
 
 ## Usage
