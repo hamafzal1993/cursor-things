@@ -1,0 +1,56 @@
+name: HubSpot Daily Digest
+
+on:
+  schedule:
+    # Runs every day at 08:00 UTC
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Enable debug output'
+        required: false
+        default: 'false'
+
+jobs:
+  digest:
+    name: Fetch & Publish HubSpot Digest
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run HubSpot digest
+        run: npx ts-node src/hubspot-digest.ts
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hubspot-digest-${{ github.run_id }}
+          path: output/hubspot-digest-*.md
+          retention-days: 30
+
+      - name: Commit digest to repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add output/
+          if git diff --cached --quiet; then
+            echo "No new digest to commit."
+          else
+            DATE=$(date -u +%Y-%m-%d)
+            git commit -m "chore: add HubSpot daily digest for ${DATE}"
+            git push origin HEAD
+          fi
