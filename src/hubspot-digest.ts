@@ -1,4 +1,6 @@
-import axios from 'axios';
+import { execSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 
 interface NewsItem {
   title: string;
@@ -32,10 +34,18 @@ function parseItems(xml: string, category: string): NewsItem[] {
     const title = extractTag(block, 'title');
     const link = extractTag(block, 'link') || extractTag(block, 'guid');
     const pubDate = extractTag(block, 'pubDate');
-    const description = extractTag(block, 'description')
-      .replace(/<[^>]+>/g, '')
-      .slice(0, 200)
-      .trim();
+    const rawDesc = extractTag(block, 'description');
+    const description = rawDesc
+      .replace(/&lt;[^&]*&gt;/g, '')   // strip HTML-encoded tags
+      .replace(/<[^>]+>/g, '')          // strip any remaining real tags
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#\d+;/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 220);
 
     if (title && link) {
       items.push({ title, link, pubDate, description, category });
@@ -45,12 +55,10 @@ function parseItems(xml: string, category: string): NewsItem[] {
   return items;
 }
 
-function isToday(dateStr: string): boolean {
+function isRecent(dateStr: string): boolean {
   if (!dateStr) return false;
   const itemDate = new Date(dateStr);
-  const now = new Date();
-  // Include items from last 24 hours, fallback to last 48h if feed has stale data
-  const cutoff = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+  const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
   return itemDate >= cutoff;
 }
 
@@ -72,12 +80,15 @@ function formatDigest(allItems: NewsItem[]): string {
     return digest;
   }
 
-  digest += `**${allItems.length} new article${allItems.length !== 1 ? 's' : ''} across ${Object.keys(byCategory).length} blog${Object.keys(byCategory).length !== 1 ? 's' : ''}**\n\n---\n\n`;
+  const blogCount = Object.keys(byCategory).length;
+  digest += `**${allItems.length} new article${allItems.length !== 1 ? 's' : ''} across ${blogCount} blog${blogCount !== 1 ? 's' : ''}**\n\n---\n\n`;
 
   for (const [category, items] of Object.entries(byCategory)) {
     digest += `## ${category} Blog\n\n`;
     for (const item of items) {
-      const date = item.pubDate ? new Date(item.pubDate).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+      const date = item.pubDate
+        ? new Date(item.pubDate).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })
+        : '';
       digest += `### [${item.title}](${item.link})\n`;
       if (date) digest += `_Published: ${date}_\n\n`;
       if (item.description) digest += `${item.description}...\n\n`;
@@ -88,15 +99,14 @@ function formatDigest(allItems: NewsItem[]): string {
   return digest;
 }
 
-async function fetchFeed(url: string, label: string): Promise<NewsItem[]> {
+function fetchFeed(url: string, label: string): NewsItem[] {
   try {
-    const response = await axios.get<string>(url, {
-      timeout: 15000,
-      headers: { 'User-Agent': 'HubSpot-Daily-Digest/1.0' },
-      responseType: 'text',
-    });
-    const items = parseItems(response.data, label);
-    return items.filter(item => isToday(item.pubDate));
+    const xml = execSync(
+      `curl -s --max-time 20 -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" "${url}"`,
+      { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
+    );
+    const items = parseItems(xml, label);
+    return items.filter(item => isRecent(item.pubDate));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`Failed to fetch ${label} feed: ${msg}`);
@@ -104,18 +114,15 @@ async function fetchFeed(url: string, label: string): Promise<NewsItem[]> {
   }
 }
 
-async function main() {
+function main() {
   console.log('Fetching HubSpot RSS feeds...');
 
-  const results = await Promise.all(FEEDS.map(f => fetchFeed(f.url, f.label)));
-  const allItems = results.flat();
-
+  const allItems = FEEDS.flatMap(f => fetchFeed(f.url, f.label));
   const digest = formatDigest(allItems);
 
   // Write to GitHub Actions step summary if available
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (summaryPath) {
-    const fs = await import('fs');
     fs.appendFileSync(summaryPath, digest);
     console.log('Digest written to GitHub Actions summary.');
   } else {
@@ -123,17 +130,13 @@ async function main() {
   }
 
   // Save to output file
-  const fs = await import('fs');
   const outDir = 'output';
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
 
   const dateStr = new Date().toISOString().slice(0, 10);
-  const outPath = `${outDir}/hubspot-digest-${dateStr}.md`;
+  const outPath = path.join(outDir, `hubspot-digest-${dateStr}.md`);
   fs.writeFileSync(outPath, digest);
   console.log(`Digest saved to ${outPath}`);
 }
 
-main().catch(err => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+main();
