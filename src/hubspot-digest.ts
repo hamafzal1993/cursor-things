@@ -62,6 +62,38 @@ function isRecent(dateStr: string): boolean {
   return itemDate >= cutoff;
 }
 
+function formatWhatsApp(allItems: NewsItem[]): string {
+  const today = new Date().toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric',
+  });
+
+  if (allItems.length === 0) {
+    return `📰 *HubSpot Daily Digest — ${today}*\n\nNo new articles in the last 48 hours.`;
+  }
+
+  const byCategory: Record<string, NewsItem[]> = {};
+  for (const item of allItems) {
+    if (!byCategory[item.category]) byCategory[item.category] = [];
+    byCategory[item.category].push(item);
+  }
+
+  let msg = `📰 *HubSpot Daily Digest — ${today}*\n${allItems.length} new article${allItems.length !== 1 ? 's' : ''}\n`;
+
+  for (const [category, items] of Object.entries(byCategory)) {
+    msg += `\n*${category} Blog*\n`;
+    for (const item of items) {
+      msg += `• ${item.title}\n  ${item.link}\n`;
+    }
+  }
+
+  // WhatsApp messages cap at ~4096 chars; truncate gracefully
+  if (msg.length > 3800) {
+    msg = msg.slice(0, 3800) + '\n\n_(truncated)_';
+  }
+
+  return msg;
+}
+
 function formatDigest(allItems: NewsItem[]): string {
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
@@ -137,6 +169,11 @@ function main() {
   const outPath = path.join(outDir, `hubspot-digest-${dateStr}.md`);
   fs.writeFileSync(outPath, digest);
   console.log(`Digest saved to ${outPath}`);
+
+  // Write WhatsApp-friendly summary for the workflow to pick up
+  const waPath = path.join(outDir, 'whatsapp-message.txt');
+  fs.writeFileSync(waPath, formatWhatsApp(allItems));
+  console.log(`WhatsApp summary saved to ${waPath}`);
 }
 
 main();
